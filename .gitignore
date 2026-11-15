@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+
+# Dossiers générés par colcon (au cas où ils se retrouveraient ici)
+build/
+install/
+log/
+
+# Éditeur
+.vscode/

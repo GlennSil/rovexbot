@@ -1,0 +1,49 @@
+<?xml version="1.0"?>
+
+<robot name="rovexbot" xmlns:xacro="http://ros.org/wiki/xacro">
+    <ros2_control name="RobotSystem" type="system">
+
+        <!-- Simulation : plugin Gazebo selon la version de ROS 2 -->
+        <xacro:if value="$(arg is_sim)">
+            <xacro:if value="$(arg is_ignition)">
+                <hardware>
+                    <plugin>ign_ros2_control/IgnitionSystem</plugin>
+                </hardware>
+            </xacro:if>
+            <xacro:unless value="$(arg is_ignition)">
+                <hardware>
+                    <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+                </hardware>
+            </xacro:unless>
+        </xacro:if>
+
+        <!-- Robot réel : hardware interface série vers l'Arduino -->
+        <xacro:unless value="$(arg is_sim)">
+            <hardware>
+                <plugin>rovexbot_firmware/RovexbotInterface</plugin>
+                <param name="port">$(arg port)</param>
+            </hardware>
+        </xacro:unless>
+
+        <!-- L'ordre compte : roue droite = indice 0, roue gauche = indice 1 dans RovexbotInterface -->
+        <!-- Limites en rad/s : 0.7 m/s / 0.0325 m ≈ 21.5 rad/s -->
+        <joint name="wheel_right_joint">
+            <command_interface name="velocity">
+                <param name="min">-22</param>
+                <param name="max">22</param>
+            </command_interface>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+        </joint>
+
+        <joint name="wheel_left_joint">
+            <command_interface name="velocity">
+                <param name="min">-22</param>
+                <param name="max">22</param>
+            </command_interface>
+            <state_interface name="position"/>
+            <state_interface name="velocity"/>
+        </joint>
+
+    </ros2_control>
+</robot>

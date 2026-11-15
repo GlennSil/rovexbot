@@ -1,0 +1,9 @@
+<library path="rovexbot_firmware">
+  <class name="rovexbot_firmware/RovexbotInterface"
+         type="rovexbot_firmware::RovexbotInterface"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      Hardware interface ros2_control du RovexBot : communication série avec l'Arduino.
+    </description>
+  </class>
+</library>
