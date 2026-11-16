@@ -2,11 +2,13 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.time import Time
 from sensor_msgs.msg import LaserScan
 from nav_msgs.msg import OccupancyGrid, MapMetaData
 from tf2_ros import Buffer, TransformListener
-from tf2_ros import LookupException
+from tf2_ros import TransformException
 from tf_transformations import euler_from_quaternion
+from collections import deque
 import math
 
 PRIOR_PROB = 0.5
@@ -87,6 +89,10 @@ def inverseSensorModel(p_robot: Pose, p_beam: Pose):
     occ_values.append((line[-1], OCC_PROB))  # OCCUPIED
     return occ_values
 
+# Incréments de log-odds calculés une seule fois (au lieu d'un log par case)
+L_OCC = prob2logodds(OCC_PROB) - prob2logodds(PRIOR_PROB)
+L_FREE = prob2logodds(FREE_PROB) - prob2logodds(PRIOR_PROB)
+
 class MappingWithKnownPoses(Node):
     def __init__(self, name):
         super().__init__(name)
@@ -110,17 +116,41 @@ class MappingWithKnownPoses(Node):
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        # Les scans sont mis en file d'attente puis intégrés un par un, dès que
+        # la pose du robot à l'instant du scan est connue. Les 10 plus récents
+        # sont gardés : un scan dont la pose n'arrive jamais finit par sortir.
+        self.scan_queue_ = deque(maxlen=10)
+        self.dirty_cells_ = set()  # cases modifiées depuis la dernière publication
         self.scan_sub = self.create_subscription(LaserScan, "scan", self.scanCallback, 10)
         self.map_pub = self.create_publisher(OccupancyGrid, "map", 1)
         self.timer = self.create_timer(1.0, self.timerCallback)
+        self.process_timer = self.create_timer(0.05, self.processScans)
 
     def scanCallback(self, scan: LaserScan):
-        try:
-            t = self.tf_buffer.lookup_transform(self.map_.header.frame_id, scan.header.frame_id, rclpy.time.Time())
-        except LookupException:
-            self.get_logger().error("Unable to transform between /odom and /base_footprint")
-            return
+        self.scan_queue_.append(scan)
 
+    def processScans(self):
+        # Un seul scan par appel : entre deux appels, le nœud peut recevoir
+        # les nouvelles transformations.
+        if not self.scan_queue_:
+            return
+        scan = self.scan_queue_[0]
+        stamp = Time.from_msg(scan.header.stamp)
+        # Pose du lidar à l'instant où le scan a été mesuré, et non la dernière
+        # pose connue : pendant une rotation, le robot a déjà tourné entre la
+        # mesure du scan et son traitement. Si cette pose n'est pas encore
+        # arrivée, on réessaie au prochain appel.
+        if not self.tf_buffer.can_transform(self.map_.header.frame_id, scan.header.frame_id, stamp):
+            return
+        self.scan_queue_.popleft()
+        try:
+            t = self.tf_buffer.lookup_transform(self.map_.header.frame_id, scan.header.frame_id, stamp)
+        except TransformException as ex:
+            self.get_logger().warn("Scan ignoré : %s" % ex, throttle_duration_sec=2.0)
+            return
+        self.integrateScan(scan, t)
+
+    def integrateScan(self, scan: LaserScan, t):
         robot_p = coordinatesToPose(t.transform.translation.x, t.transform.translation.y, self.map_.info)
         if not poseOnMap(robot_p, self.map_.info):
             self.get_logger().error("The robot is out of the map!")
@@ -149,10 +179,14 @@ class MappingWithKnownPoses(Node):
             for pose, value in poses:
                 if poseOnMap(pose, self.map_.info):
                     cell = poseToCell(pose, self.map_.info)
-                    self.probability_map_[cell] += prob2logodds(value) - prob2logodds(PRIOR_PROB)
+                    self.probability_map_[cell] += L_OCC if value == OCC_PROB else L_FREE
+                    self.dirty_cells_.add(cell)
 
     def timerCallback(self):
-        self.map_.data = [int(logodds2prob(value) * 100) for value in self.probability_map_]
+        # Seules les cases modifiées sont recalculées
+        for cell in self.dirty_cells_:
+            self.map_.data[cell] = int(logodds2prob(self.probability_map_[cell]) * 100)
+        self.dirty_cells_.clear()
         self.map_.header.stamp = self.get_clock().now().to_msg()
         self.map_pub.publish(self.map_)
 
