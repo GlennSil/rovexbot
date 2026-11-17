@@ -1,16 +1,24 @@
 #include <PID_v1.h>
 
 // ---------- L298N ----------
-#define L298N_enA 9    // PWM roue droite
-#define L298N_in1 12   // Sens roue droite
-#define L298N_in2 13   // Sens roue droite
-#define L298N_enB 11   // PWM roue gauche
-#define L298N_in3 7    // Sens roue gauche
-#define L298N_in4 8    // Sens roue gauche
+// Câblage réel du robot (vérifié avec l'outil de réglage des PID) :
+// Roue gauche : canal A du L298N
+#define LEFT_PWM 9     // ENA
+#define LEFT_IN1 12    // IN1
+#define LEFT_IN2 13    // IN2
+// Roue droite : canal B du L298N
+#define RIGHT_PWM 11   // ENB
+#define RIGHT_IN1 7    // IN3
+#define RIGHT_IN2 8    // IN4
+
+// Sens de rotation : true si la roue tourne à l'envers de ce que demande ROS.
+// Les deux moteurs sont câblés en sens inverse de la marche avant du robot.
+const bool RIGHT_MOTOR_INVERT = true;
+const bool LEFT_MOTOR_INVERT  = true;
 
 // ---------- Encodeurs ----------
 #define right_encoder_phaseA 3   // Interruption
-#define right_encoder_phaseB 5
+#define right_encoder_phaseB 5   // non utilisée : le sens vient de la commande
 #define left_encoder_phaseA 2    // Interruption
 #define left_encoder_phaseB 4
 
@@ -21,8 +29,13 @@ const double TICKS_TO_RAD_S = (1000.0 / interval) * (2.0 * PI / ENCODER_PPR);
 // Variables partagées avec les interruptions -> volatile
 volatile unsigned int right_encoder_counter = 0;
 volatile unsigned int left_encoder_counter = 0;
-volatile char right_wheel_sign = 'p';   // 'p' = positif, 'n' = négatif
-volatile char left_wheel_sign = 'p';
+
+// Sens demandé par ROS, utilisé pour signer la vitesse renvoyée.
+// La phase B n'est pas assez fiable pour ça : lue une seule fois par front
+// montant de la phase A, elle donne un sens faux dès que la roue vibre ou
+// change de sens, ce qui rend l'odométrie incohérente.
+bool right_wheel_forward = true;
+bool left_wheel_forward = true;
 
 unsigned long last_millis = 0;
 
@@ -44,21 +57,26 @@ double left_wheel_meas_vel = 0.0;
 double right_wheel_cmd = 0.0;
 double left_wheel_cmd = 0.0;
 // Réglages
-double Kp_r = 11.5, Ki_r = 7.5, Kd_r = 0.1;
-double Kp_l = 12.8, Ki_l = 8.3, Kd_l = 0.1;
+// Gains relevés avec tools/pid_tuner.py (robot surélevé, 2 / 5 / 10 rad/s)
+double Kp_r = 16.5, Ki_r = 16.0, Kd_r = 0.0;
+double Kp_l = 16.0, Ki_l = 16.0, Kd_l = 0.0;
 
 PID rightMotor(&right_wheel_meas_vel, &right_wheel_cmd, &right_wheel_cmd_vel, Kp_r, Ki_r, Kd_r, DIRECT);
 PID leftMotor(&left_wheel_meas_vel, &left_wheel_cmd, &left_wheel_cmd_vel, Kp_l, Ki_l, Kd_l, DIRECT);
 
 
 void setRightDirection(bool forward) {
-  digitalWrite(L298N_in1, forward ? HIGH : LOW);
-  digitalWrite(L298N_in2, forward ? LOW : HIGH);
+  right_wheel_forward = forward;
+  bool level = (forward != RIGHT_MOTOR_INVERT);   // inverse le sens si nécessaire
+  digitalWrite(RIGHT_IN1, level ? HIGH : LOW);
+  digitalWrite(RIGHT_IN2, level ? LOW : HIGH);
 }
 
 void setLeftDirection(bool forward) {
-  digitalWrite(L298N_in3, forward ? HIGH : LOW);
-  digitalWrite(L298N_in4, forward ? LOW : HIGH);
+  left_wheel_forward = forward;
+  bool level = (forward != LEFT_MOTOR_INVERT);
+  digitalWrite(LEFT_IN1, level ? HIGH : LOW);
+  digitalWrite(LEFT_IN2, level ? LOW : HIGH);
 }
 
 void resetValue() {
@@ -68,12 +86,12 @@ void resetValue() {
 
 
 void setup() {
-  pinMode(L298N_enA, OUTPUT);
-  pinMode(L298N_enB, OUTPUT);
-  pinMode(L298N_in1, OUTPUT);
-  pinMode(L298N_in2, OUTPUT);
-  pinMode(L298N_in3, OUTPUT);
-  pinMode(L298N_in4, OUTPUT);
+  pinMode(RIGHT_PWM, OUTPUT);
+  pinMode(LEFT_PWM, OUTPUT);
+  pinMode(RIGHT_IN1, OUTPUT);
+  pinMode(RIGHT_IN2, OUTPUT);
+  pinMode(LEFT_IN1, OUTPUT);
+  pinMode(LEFT_IN2, OUTPUT);
 
   setRightDirection(true);
   setLeftDirection(true);
@@ -140,24 +158,28 @@ void loop() {
     noInterrupts();
     unsigned int right_count = right_encoder_counter;
     unsigned int left_count = left_encoder_counter;
-    char right_sign = right_wheel_sign;
-    char left_sign = left_wheel_sign;
     right_encoder_counter = 0;
     left_encoder_counter = 0;
     interrupts();
 
+    // L'encodeur donne la vitesse, le sens vient de la commande
+    char right_sign = right_wheel_forward ? 'p' : 'n';
+    char left_sign = left_wheel_forward ? 'p' : 'n';
+
     right_wheel_meas_vel = right_count * TICKS_TO_RAD_S;
     left_wheel_meas_vel = left_count * TICKS_TO_RAD_S;
+
+    // Consigne nulle -> moteur coupé et PID en manuel : l'intégrale repart de zéro au prochain départ
+    if (right_wheel_cmd_vel == 0.0) right_wheel_cmd = 0.0;
+    if (left_wheel_cmd_vel == 0.0) left_wheel_cmd = 0.0;
+    rightMotor.SetMode(right_wheel_cmd_vel == 0.0 ? MANUAL : AUTOMATIC);
+    leftMotor.SetMode(left_wheel_cmd_vel == 0.0 ? MANUAL : AUTOMATIC);
 
     rightMotor.Compute();
     leftMotor.Compute();
 
-    // Consigne nulle -> moteur coupé (évite le grésillement à l'arrêt)
-    if (right_wheel_cmd_vel == 0.0) right_wheel_cmd = 0.0;
-    if (left_wheel_cmd_vel == 0.0) left_wheel_cmd = 0.0;
-
-    analogWrite(L298N_enA, (int)right_wheel_cmd);
-    analogWrite(L298N_enB, (int)left_wheel_cmd);
+    analogWrite(RIGHT_PWM, (int)right_wheel_cmd);
+    analogWrite(LEFT_PWM, (int)left_wheel_cmd);
 
     // ---------- 3. Envoi des vitesses mesurées ----------
     // Format lu par RovexbotInterface::read() : "rp4.73,ln2.10,"
@@ -173,13 +195,11 @@ void loop() {
 
 
 // ---------- Interruptions encodeurs ----------
+// On compte seulement les impulsions : le sens vient de la commande (voir plus haut)
 void rightEncoderCallback() {
-  right_wheel_sign = (digitalRead(right_encoder_phaseB) == HIGH) ? 'p' : 'n';
   right_encoder_counter++;
 }
 
-// Moteur gauche monté en miroir -> signe inversé
 void leftEncoderCallback() {
-  left_wheel_sign = (digitalRead(left_encoder_phaseB) == HIGH) ? 'n' : 'p';
   left_encoder_counter++;
 }

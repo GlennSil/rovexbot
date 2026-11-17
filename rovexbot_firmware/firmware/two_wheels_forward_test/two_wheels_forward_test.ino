@@ -3,12 +3,15 @@
 // Format envoyé toutes les 100 ms : "rp4.73,lp4.60,"
 
 // ---------- L298N ----------
-#define L298N_enA 9    // PWM roue droite
-#define L298N_in1 12   // Sens roue droite
-#define L298N_in2 13   // Sens roue droite
-#define L298N_enB 11   // PWM roue gauche
-#define L298N_in3 7    // Sens roue gauche
-#define L298N_in4 8    // Sens roue gauche
+// Câblage réel du robot (vérifié avec l'outil de réglage des PID) :
+// Roue gauche : canal A du L298N
+#define LEFT_PWM 9     // ENA, fil blanc
+#define LEFT_IN1 12    // IN1, fil blanc pâle
+#define LEFT_IN2 13    // IN2, fil violet
+// Roue droite : canal B du L298N
+#define RIGHT_PWM 11   // ENB, fil jaune
+#define RIGHT_IN1 7    // IN3
+#define RIGHT_IN2 8    // IN4
 
 // ---------- Encodeurs ----------
 #define right_encoder_phaseA 3   // Interruption
@@ -30,18 +33,20 @@ unsigned long last_millis = 0;
 
 
 void setup() {
-  pinMode(L298N_enA, OUTPUT);
-  pinMode(L298N_enB, OUTPUT);
-  pinMode(L298N_in1, OUTPUT);
-  pinMode(L298N_in2, OUTPUT);
-  pinMode(L298N_in3, OUTPUT);
-  pinMode(L298N_in4, OUTPUT);
+  pinMode(RIGHT_PWM, OUTPUT);
+  pinMode(LEFT_PWM, OUTPUT);
+  pinMode(RIGHT_IN1, OUTPUT);
+  pinMode(RIGHT_IN2, OUTPUT);
+  pinMode(LEFT_IN1, OUTPUT);
+  pinMode(LEFT_IN2, OUTPUT);
 
-  // Sens "avant" pour les deux roues
-  digitalWrite(L298N_in1, HIGH);
-  digitalWrite(L298N_in2, LOW);
-  digitalWrite(L298N_in3, HIGH);
-  digitalWrite(L298N_in4, LOW);
+  // Sens "avant" pour les deux roues.
+  // Les moteurs sont câblés en sens inverse de la marche avant du robot,
+  // d'où IN1 = LOW et IN2 = HIGH (voir RIGHT_MOTOR_INVERT dans robot_control.ino).
+  digitalWrite(RIGHT_IN1, LOW);
+  digitalWrite(RIGHT_IN2, HIGH);
+  digitalWrite(LEFT_IN1, LOW);
+  digitalWrite(LEFT_IN2, HIGH);
 
   pinMode(right_encoder_phaseA, INPUT);
   pinMode(right_encoder_phaseB, INPUT);
@@ -52,8 +57,8 @@ void setup() {
 
   Serial.begin(115200);
 
-  analogWrite(L298N_enA, TEST_PWM);
-  analogWrite(L298N_enB, TEST_PWM);
+  analogWrite(RIGHT_PWM, TEST_PWM);
+  analogWrite(LEFT_PWM, TEST_PWM);
 }
 
 

@@ -71,6 +71,18 @@ def generate_launch_description():
         output="screen"
     )
 
+    # Fusion odometrie des roues + IMU. C'est l'EKF qui publie odom -> base_footprint.
+    local_localization = IncludeLaunchDescription(
+        os.path.join(
+            get_package_share_directory("rovexbot_localization"),
+            "launch",
+            "local_localization.launch.py"
+        ),
+        launch_arguments={
+            "use_sim_time": "False"
+        }.items(),
+    )
+
     # --- Désactivé pour l'instant : décommenter ici ET dans la liste du return ---
     #
     # laser_driver = Node(   # nécessite rplidar_ros et le fichier config/rplidar_a1.yaml
@@ -125,6 +137,7 @@ def generate_launch_description():
         controller,
         joystick,
         imu_driver_node,
+        local_localization,
         # laser_driver,
         # localization,
         # slam,

@@ -20,7 +20,7 @@ def generate_launch_description():
     # Le monde Gazebo et la carte d'AMCL doivent représenter le même environnement
     world_name_arg = DeclareLaunchArgument(
         "world_name",
-        default_value="small_house",
+        default_value="empty",
         description="Monde Gazebo (dossier worlds de rovexbot_description)"
     )
 
@@ -99,6 +99,18 @@ def generate_launch_description():
     #     ),
     # )
 
+    # Fusion odometrie des roues + IMU. C'est l'EKF qui publie odom -> base_footprint.
+    local_localization = IncludeLaunchDescription(
+        os.path.join(
+            get_package_share_directory("rovexbot_localization"),
+            "launch",
+            "local_localization.launch.py"
+        ),
+        launch_arguments={
+            "use_sim_time": "True"
+        }.items(),
+    )
+
     rviz = Node(
         package="rviz2",
         executable="rviz2",
@@ -118,6 +130,7 @@ def generate_launch_description():
         gazebo,
         controller,
         joystick,
+        local_localization,
         localization,
         # slam,
         # navigation,

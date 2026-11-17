@@ -35,6 +35,17 @@ class MPU6050_Driver(Node):
         self.declare_parameter("i2c_bus", 7)
         self.i2c_bus_ = self.get_parameter("i2c_bus").value
 
+        # Paramètre : nombre d'échantillons de calibration (200 = 2 s à 100 Hz).
+        # 0 désactive la calibration.
+        self.declare_parameter("calibration_samples", 200)
+        self.calibration_samples_ = self.get_parameter("calibration_samples").value
+
+        # Biais du gyroscope, mesuré au démarrage pendant que le robot est immobile
+        self.gyro_bias_ = [0.0, 0.0, 0.0]
+        self.calibration_sum_ = [0.0, 0.0, 0.0]
+        self.calibration_count_ = 0
+        self.is_calibrated_ = (self.calibration_samples_ <= 0)
+
         # Interface I2C
         self.bus_ = None
         self.is_connected_ = False
@@ -56,6 +67,11 @@ class MPU6050_Driver(Node):
 
         self.period_ = 0.01   # s -> 100 Hz
         self.timer_ = self.create_timer(self.period_, self.timerCallback)
+
+        if not self.is_calibrated_:
+            self.get_logger().info(
+                "Calibration du gyroscope sur %d échantillons : NE PAS BOUGER LE ROBOT."
+                % self.calibration_samples_)
 
     def timerCallback(self):
         # Capteur absent : on retente la connexion et on sort si elle échoue
@@ -80,15 +96,40 @@ class MPU6050_Driver(Node):
         gyro_y = self.to_signed(data[10], data[11])
         gyro_z = self.to_signed(data[12], data[13])
 
+        gyro = [gyro_x / GYRO_SCALE, gyro_y / GYRO_SCALE, gyro_z / GYRO_SCALE]   # rad/s
+
+        # Calibration : au repos, le gyroscope devrait lire 0. Ce qu'il lit est son biais.
+        # On le moyenne sur quelques secondes, puis on le soustrait de toutes les mesures.
+        if not self.is_calibrated_:
+            self.collectCalibration(gyro)
+            return
+
         self.imu_msg_.linear_acceleration.x = acc_x / ACCEL_SCALE
         self.imu_msg_.linear_acceleration.y = acc_y / ACCEL_SCALE
         self.imu_msg_.linear_acceleration.z = acc_z / ACCEL_SCALE
-        self.imu_msg_.angular_velocity.x = gyro_x / GYRO_SCALE
-        self.imu_msg_.angular_velocity.y = gyro_y / GYRO_SCALE
-        self.imu_msg_.angular_velocity.z = gyro_z / GYRO_SCALE
+        self.imu_msg_.angular_velocity.x = gyro[0] - self.gyro_bias_[0]
+        self.imu_msg_.angular_velocity.y = gyro[1] - self.gyro_bias_[1]
+        self.imu_msg_.angular_velocity.z = gyro[2] - self.gyro_bias_[2]
 
         self.imu_msg_.header.stamp = self.get_clock().now().to_msg()
         self.imu_pub_.publish(self.imu_msg_)
+
+    def collectCalibration(self, gyro):
+        """Accumule les mesures au repos et calcule le biais une fois le compte atteint."""
+        for axis in range(3):
+            self.calibration_sum_[axis] += gyro[axis]
+        self.calibration_count_ += 1
+
+        if self.calibration_count_ < self.calibration_samples_:
+            return
+
+        self.gyro_bias_ = [total / self.calibration_count_ for total in self.calibration_sum_]
+        self.is_calibrated_ = True
+        self.get_logger().info(
+            "Biais du gyroscope : x=%.4f  y=%.4f  z=%.4f rad/s" % tuple(self.gyro_bias_))
+        if max(abs(bias) for bias in self.gyro_bias_) > 0.5:
+            self.get_logger().warn(
+                "Biais inhabituellement élevé : le robot a-t-il bougé pendant la calibration ?")
 
     def init_i2c(self):
         try:
